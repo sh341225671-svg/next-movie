@@ -85,74 +85,94 @@ export function getProfileRecommendations(user, interactions) {
   return result.slice(0, 6)
 }
 
-// ━━━ 文字提问推荐（强化关键词匹配） ━━━
-export function getTextRecommendations(query, user, interactions) {
+// ━━━ 文字提问推荐（先 AI 后算法降级） ━━━
+export async function getTextRecommendations(query, user, interactions) {
   const profile = buildUserProfile(user, interactions)
   const candidates = getCachedCandidates()
   const watchedSet = new Set(profile.watchedMovies)
-  const q = query.toLowerCase()
   
-  // 提取关键词（保留更多中文词汇）
-  const keywords = q.split(/[\s,\.!\?;:\u3000-\u303f\uff00-\uffef]+/).filter(w => w.length >= 2 && !'的了我喜欢看非常很特别最和与要请给想找一部些个之类像那样被在有了'.includes(w))
-  
-  // 类型名称映射
-  const genreNames = { 动作:28, 冒险:12, 动画:16, 喜剧:35, 犯罪:80, 纪录:99, 剧情:18, 家庭:10751, 奇幻:14, 历史:36, 恐怖:27, 音乐:10402, 悬疑:9648, 爱情:10749, 科幻:878, 惊悚:53, 战争:10752, 西部:37 }
-  
-  // 从关键词推断类型
-  const inferredGenres = new Set()
-  keywords.forEach(k => {
-    Object.entries(genreNames).forEach(([name, id]) => {
-      if (k.includes(name) || name.includes(k)) inferredGenres.add(id)
-    })
-  })
-  
-  // 评分候选
-  let scored = candidates
-    .filter(m => !watchedSet.has(m.id))
-    .map(m => {
-      let score = 0
-      const title = (m.title || '').toLowerCase()
-      const overview = (m.overview || '').toLowerCase()
-      
-      // 标题匹配（高权重）
-      keywords.forEach(k => {
-        if (title.includes(k)) score += 5
-        if (overview.includes(k)) score += 2
+  // 先试 AI（DeepSeek 直连）
+  try {
+    const aiKey = import.meta.env.VITE_AI_API_KEY
+    if (aiKey) {
+      const prompt = `你是一个专业电影推荐顾问。用户说：${query.slice(0, 100)}
+从候选影片中推荐6部最匹配的，每部给50字以上的个性化推荐理由（贴合用户需求+电影特色）。
+按匹配度排序（首选/次选/备选）。
+候选影片：${candidates.slice(0, 15).map(m => `${m.title}(${m.year})${m.rating}分-${(m.overview||'').slice(0,30)}`).join(';')}
+
+输出严格JSON格式：{"recommendations":[{"title":"片名","year":"年份","tier":"首选/次选/备选","reason":"50字以上理由"}]}`
+
+      const res = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [
+            { role: 'system', content: '直接输出JSON，不要思考过程。' },
+            { role: 'user', content: prompt }
+          ],
+          max_tokens: 4096,
+          temperature: 0.3
+        })
       })
-      
-      // 类型匹配
-      if (inferredGenres.size > 0) {
-        const matchCount = (m.genreIds || []).filter(g => inferredGenres.has(g)).length
-        score += matchCount * 3
+      if (res.ok) {
+        const data = await res.json()
+        let content = data.choices?.[0]?.message?.content || ''
+        // 回退到 reasoning_content
+        if (!content) content = data.choices?.[0]?.message?.reasoning_content || ''
+        const parsed = tryParseJSON(content)
+        if (parsed?.recommendations?.length) {
+          // 匹配电影数据
+          return parsed.recommendations.slice(0, 6).map(rec => {
+            const match = candidates.find(m =>
+              m.title === rec.title || m.title?.includes(rec.title) || rec.title?.includes(m.title)
+            )
+            return match ? { ...rec, movie: match } : { movie: null, title: rec.title, year: rec.year, tier: rec.tier, reason: rec.reason }
+          }).filter(r => r.movie && !watchedSet.has(r.movie.id))
+        }
       }
-      
-      // 评分加成
-      const rating = parseFloat(m.rating || 0)
-      if (rating >= 8) score += 2
-      else if (rating >= 7) score += 1
-      
-      return { movie: m, score }
-    })
-    .filter(x => x.score > 0)
-    .sort((a, b) => b.score - a.score)
+    }
+  } catch (e) { console.warn('[推荐] AI不可用，使用算法降级', e.message) }
   
-  const result = scored.slice(0, 6).map(s => ({
-    movie: s.movie,
-    reason: typeToReason(s.movie, inferredGenres, {}),
-    tier: '推荐'
-  }))
+  // AI 降级 → 关键词匹配（同上）
+  return getKeywordRecommendations(query, candidates, watchedSet)
+}
+
+function tryParseJSON(text) {
+  try { return JSON.parse(text) } catch {}
+  const m = text.match(/\{[\s\S]*\}/)
+  if (m) try { return JSON.parse(m[0]) } catch {}
+  return null
+}
+
+// 关键词降级匹配
+function getKeywordRecommendations(query, candidates, watchedSet) {
+  const q = query.toLowerCase()
+  const keywords = q.split(/[\s,\.!\?;:\u3000-\u303f\uff00-\uffef]+/).filter(w => w.length >= 2 && !'的了我喜欢看非常很特别最和与要请给想找一部些个之类像那样被在有了'.includes(w))
+  const genreNames = { 动作:28, 冒险:12, 动画:16, 喜剧:35, 犯罪:80, 纪录:99, 剧情:18, 家庭:10751, 奇幻:14, 历史:36, 恐怖:27, 音乐:10402, 悬疑:9648, 爱情:10749, 科幻:878, 惊悚:53, 战争:10752, 西部:37 }
+  const inferredGenres = new Set()
+  keywords.forEach(k => Object.entries(genreNames).forEach(([n, id]) => { if (k.includes(n) || n.includes(k)) inferredGenres.add(id) }))
   
-  // 不够6部补高分
+  const scored = candidates.filter(m => !watchedSet.has(m.id)).map(m => {
+    let score = 0
+    const t = (m.title||'').toLowerCase(), o = (m.overview||'').toLowerCase()
+    keywords.forEach(k => { if (t.includes(k)) score += 5; if (o.includes(k)) score += 2 })
+    if (inferredGenres.size > 0) score += (m.genreIds||[]).filter(g => inferredGenres.has(g)).length * 3
+    const r = parseFloat(m.rating||0)
+    if (r >= 8) score += 2; else if (r >= 7) score += 1
+    return { movie: m, score }
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score)
+  
+  const result = scored.slice(0, 6).map(s => ({ movie: s.movie, reason: typeToReason(s.movie, inferredGenres, {}), tier: '推荐' }))
   if (result.length < 6) {
-    const usedIds = new Set(result.map(r => r.movie.id))
-    for (const c of [...candidates].sort((a, b) => parseFloat(b.rating || 0) - parseFloat(a.rating || 0))) {
+    const used = new Set(result.map(r => r.movie.id))
+    for (const c of [...candidates].sort((a,b) => parseFloat(b.rating||0) - parseFloat(a.rating||0))) {
       if (result.length >= 6) break
-      if (usedIds.has(c.id) || watchedSet.has(c.id)) continue
-      result.push({ movie: c, reason: `高分推荐 · ${c.rating}分`, tier: '备选' })
-      usedIds.add(c.id)
+      if (used.has(c.id) || watchedSet.has(c.id)) continue
+      result.push({ movie: c, reason: `高分推荐·${c.rating}分。${(c.overview||'').slice(0,30)}`, tier: '备选' })
+      used.add(c.id)
     }
   }
-  
   return result.slice(0, 6)
 }
 
@@ -175,13 +195,21 @@ function getCachedCandidates() {
 }
 
 function typeToReason(movie, topGenres, genreScore) {
-  const matchedG = (movie.genreIds || []).filter(g => topGenres.includes(g))
-  if (matchedG.length >= 2) return `与你喜欢的类型高度匹配 · ${movie.rating}分`
-  if (matchedG.length === 1) return `与你喜欢的「${genreName(matchedG[0])}」类型相符 · ${movie.rating}分`
-  return `高分推荐 · ${movie.rating}分`
-}
-
-function genreName(id) {
-  const names = { 28:'动作',12:'冒险',16:'动画',35:'喜剧',80:'犯罪',99:'纪录',18:'剧情',10751:'家庭',14:'奇幻',36:'历史',27:'恐怖',10402:'音乐',9648:'悬疑',10749:'爱情',878:'科幻',10770:'电视',53:'惊悚',10752:'战争',37:'西部'}
-  return names[id] || ''
+  const matchedG = (movie.genreIds || []).filter(g => topGenres.has ? topGenres.has(g) : topGenres.includes(g))
+  const gn = g => ({28:'动作',12:'冒险',16:'动画',35:'喜剧',80:'犯罪',99:'纪录',18:'剧情',10751:'家庭',14:'奇幻',36:'历史',27:'恐怖',10402:'音乐',9648:'悬疑',10749:'爱情',878:'科幻',53:'惊悚',10752:'战争',37:'西部'})[g] || ''
+  const genreStr = matchedG.map(gn).filter(Boolean).join('、')
+  const rating = movie.rating || '?'
+  const overview = (movie.overview || '').slice(0, 40)
+  
+  if (matchedG.length >= 2 && genreStr.length > 3) {
+    return `你喜欢${genreStr}这类影片，而《${movie.title}》正是${genreStr}类型的代表作，评分${rating}分，品质有保障。${overview}`
+  }
+  if (matchedG.length === 1 && genreStr) {
+    const n = gn(matchedG[0]) || ''
+    return `与你喜欢的${n}类型完全吻合。《${movie.title}》评分高达${rating}分，是同类型中的口碑佳作。${overview}`
+  }
+  if (parseFloat(rating) >= 8) {
+    return `高分佳作推荐！《${movie.title}》获得${rating}分的超高评价，无论剧情、演技还是制作都属顶级水准。${overview}`
+  }
+  return `值得一看的优质影片。《${movie.title}》评分${rating}分，口碑良好。${overview}`
 }
