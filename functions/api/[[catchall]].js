@@ -24,12 +24,13 @@ export async function onRequest(context) {
     if (path.startsWith('/api/tmdb-img/')) {
       const imgPath = path.replace('/api/tmdb-img', '')
       const target = `https://image.tmdb.org${imgPath}?api_key=${env.VITE_TMDB_API_KEY || '42dace73a1c2b8df4438c9fb198bc7f2'}`
-      const resp = await fetch(target)
+      const resp = await fetch(target, { cf: { cacheTtl: 86400, cacheEverything: true } })
       return new Response(resp.body, {
         status: resp.status,
         headers: {
           'Content-Type': resp.headers.get('content-type') || 'image/jpeg',
-          'Cache-Control': 'public, max-age=86400',
+          'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+          'CDN-Cache-Control': 'public, max-age=86400',
           'Access-Control-Allow-Origin': '*'
         }
       })
