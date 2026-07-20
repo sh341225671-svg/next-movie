@@ -349,7 +349,7 @@ onMounted(async () => {
       getTopRated(1)
     ])
     trending.value = (trendData.results || []).slice(0, 10).map(formatMovie)
-    topRated.value = (ratedData.results || []).slice(0, 10).map(formatMovie)
+    topRated.value = (ratedData.results || []).slice(0, 8).map(formatMovie)
     
     // 过滤高分区已看过的
     if (userStore.isLoggedIn) {
@@ -388,7 +388,7 @@ onMounted(async () => {
   }
 })
 
-async function loadAutoRecs() {
+async function loadAutoRecs(seed = 0) {
   if (!userStore.isLoggedIn) { recLoading.value = false; return }
   recLoading.value = true
   try {
@@ -396,7 +396,7 @@ async function loadAutoRecs() {
       ratings: userStore.ratings,
       watched: userStore.watched,
       favorites: userStore.favorites,
-    })
+    }, seed)
     recommendations.value = recs
   } catch (e) {
     console.error(e)
@@ -412,7 +412,7 @@ const MAX_REFRESH = 3
 async function refreshRecs() {
   if (recLoading.value || refreshCount.value >= MAX_REFRESH) return
   refreshCount.value++
-  await loadAutoRecs()
+  await loadAutoRecs(refreshCount.value)
   if (recommendations.value.length) setDailyCache(recommendations.value)
 }
 
