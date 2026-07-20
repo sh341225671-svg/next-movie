@@ -266,7 +266,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/userStore'
 import { getMovieDetail, getTvDetail, getSimilar, getWatchProviders, formatMovieDetail, formatMovie, CN_PLATFORMS, FREE_SOURCES, formatWatchProviders } from '@/data/tmdb'
@@ -331,6 +331,11 @@ async function loadData() {
 }
 
 onMounted(loadData)
+
+// 同类推荐切换影片时刷新数据
+watch(() => route.params.id, () => {
+  if (movie.value && route.params.id != movie.value.id) loadData()
+})
 
 function rate(score) {
   userRating.value = score
