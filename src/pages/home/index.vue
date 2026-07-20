@@ -357,11 +357,16 @@ onMounted(async () => {
     loading.value = false
     heroLoaded.value = true
 
-    // 再异步加载推荐（不阻塞页面）
+    // 每日首次加载推荐（缓存机制）
     if (userStore.isLoggedIn) {
       const cached = getDailyCache()
       if (cached) {
-        recommendations.value = cached
+        // 过滤已看过的
+        const watchedSet = new Set(Object.keys(userStore.watched || {}).map(Number))
+        recommendations.value = cached.filter(r => !watchedSet.has(r.movie?.id || r.id))
+        if (recommendations.value.length < 6) {
+          await loadAutoRecs()
+        }
       } else {
         await loadAutoRecs()
         if (recommendations.value.length) {
