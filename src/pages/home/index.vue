@@ -240,7 +240,7 @@ import { ref, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/userStore'
 import { getTrending, getPopular, getTopRated, formatMovie } from '@/data/tmdb'
-import { getProfileRecommendations, getTextRecommendations, matchRecommendations } from '@/data/recommendation'
+import { getProfileRecommendations, getTextRecommendations } from '@/data/recommendation'
 import MovieCard from '@/components/MovieCard.vue'
 
 const router = useRouter()
@@ -330,8 +330,7 @@ function getDailyCache() {
     if (!raw) return null
     const data = JSON.parse(raw)
     const today = new Date().toDateString()
-    // 旧版本缓存可能只有4部，重新获取
-    if (data.date === today && Array.isArray(data.recs) && data.recs.length >= 6) return data.recs
+    if (data.date === today && Array.isArray(data.recs) && data.recs.length >= 6 && data.recs[0]?.reason) return data.recs
   } catch {}
   return null
 }
@@ -378,25 +377,15 @@ onMounted(async () => {
 })
 
 async function loadAutoRecs() {
-  // 仅登录用户有推荐
   if (!userStore.isLoggedIn) { recLoading.value = false; return }
-
   recLoading.value = true
   try {
-    const recs = await getProfileRecommendations(userStore.user, {
+    const recs = getProfileRecommendations(userStore.user, {
       ratings: userStore.ratings,
       watched: userStore.watched,
       favorites: userStore.favorites,
     })
-
-    // 获取候选列表来匹配
-    const popData = await getPopular(1)
-    const candidates = (popData.results || []).map(formatMovie)
-    const matched = matchRecommendations(recs, candidates)
-    recommendations.value = matched.length ? matched : candidates.slice(0, 4).map(m => ({
-      movie: m,
-      reason: `评分 ${m.rating} 的高分影片`
-    }))
+    recommendations.value = recs
   } catch (e) {
     console.error(e)
   } finally {
@@ -417,20 +406,14 @@ async function submitTextQuery() {
   if (!queryText.value.trim() || textLoading.value) return
   textLoading.value = true
   try {
-    const recs = await getTextRecommendations(queryText.value.trim(), userStore.user, {
+    const recs = getTextRecommendations(queryText.value.trim(), userStore.user, {
       ratings: userStore.ratings,
       watched: userStore.watched,
       favorites: userStore.favorites,
     })
-    const popData = await getPopular(1)
-    const candidates = (popData.results || []).map(formatMovie)
-    const matched = matchRecommendations(recs, candidates)
-    textResults.value = matched.length ? matched : candidates.slice(0, 6).map(m => ({
-      movie: m, reason: '高分推荐'
-    }))
-    // 持久化到 localStorage，刷新后仍然显示
+    textResults.value = recs
     try { localStorage.setItem('next_text_results', JSON.stringify(textResults.value)) } catch {}
-    queryText.value = '' // 清空输入框
+    queryText.value = ''
   } catch (e) {
     console.error(e)
   } finally {
