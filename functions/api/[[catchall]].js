@@ -1,5 +1,5 @@
 // Cloudflare Pages Function — 统一 API 代理
-// 处理所有 /api/tmdb/*, /api/tmdb-img/*, /api/ai/* 请求
+// 处理所有 /api/tmdb/*, /api/tmdb-img/*, /api/ai/*, /api/auth/* 请求
 
 export async function onRequest(context) {
   const { request, env } = context
@@ -7,6 +7,44 @@ export async function onRequest(context) {
   const path = url.pathname
 
   try {
+    // ═══ 用户注册 ═══
+    if (path === '/api/auth/register' && request.method === 'POST') {
+      const body = await request.json()
+      const { nickname, passwordHash, gender, age, favoriteMovies } = body
+      if (!nickname || !passwordHash) {
+        return new Response(JSON.stringify({ error: '缺少必填字段' }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+      }
+      const existing = await env.NEXT_USERS?.get(`user:${nickname}`)
+      if (existing) {
+        return new Response(JSON.stringify({ error: '该昵称已被注册' }), { status: 409, headers: { 'Content-Type': 'application/json' } })
+      }
+      const userData = { nickname, passwordHash, gender, age, favoriteMovies: favoriteMovies || [], createdAt: Date.now() }
+      if (env.NEXT_USERS) {
+        await env.NEXT_USERS.put(`user:${nickname}`, JSON.stringify(userData))
+      } else {
+        // KV 未配置时回退 localStorage（不跨浏览器但至少能用）
+        return new Response(JSON.stringify({ error: 'KV_NOT_CONFIGURED', user: null }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      const { passwordHash: _, ...safeUser } = userData
+      return new Response(JSON.stringify({ success: true, user: safeUser }), { headers: { 'Content-Type': 'application/json' } })
+    }
+
+    // ═══ 用户登录 ═══
+    if (path === '/api/auth/login' && request.method === 'POST') {
+      const body = await request.json()
+      const { nickname, passwordHash } = body
+      const raw = env.NEXT_USERS ? await env.NEXT_USERS.get(`user:${nickname}`) : null
+      if (!raw) {
+        return new Response(JSON.stringify({ error: '该昵称未注册' }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+      }
+      const user = JSON.parse(raw)
+      if (user.passwordHash !== passwordHash) {
+        return new Response(JSON.stringify({ error: '密码错误' }), { status: 401, headers: { 'Content-Type': 'application/json' } })
+      }
+      const { passwordHash: _, ...safeUser } = user
+      return new Response(JSON.stringify({ success: true, user: safeUser }), { headers: { 'Content-Type': 'application/json' } })
+    }
+
     // ═══ TMDB API ═══
     if (path.startsWith('/api/tmdb/') || path === '/api/tmdb') {
       const apiPath = path.replace('/api/tmdb', '')
@@ -27,12 +65,7 @@ export async function onRequest(context) {
       const resp = await fetch(target, { cf: { cacheTtl: 86400, cacheEverything: true } })
       return new Response(resp.body, {
         status: resp.status,
-        headers: {
-          'Content-Type': resp.headers.get('content-type') || 'image/jpeg',
-          'Cache-Control': 'public, max-age=86400, s-maxage=86400',
-          'CDN-Cache-Control': 'public, max-age=86400',
-          'Access-Control-Allow-Origin': '*'
-        }
+        headers: { 'Content-Type': resp.headers.get('content-type') || 'image/jpeg', 'Cache-Control': 'public, max-age=86400, s-maxage=86400', 'CDN-Cache-Control': 'public, max-age=86400', 'Access-Control-Allow-Origin': '*' }
       })
     }
 
@@ -44,28 +77,21 @@ export async function onRequest(context) {
         return new Response(JSON.stringify({ error: 'AI not configured' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
       }
       const target = `https://api.deepseek.com/v1${aiPath}`
-      // 转发请求体
       const body = await request.text()
       const resp = await fetch(target, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${aiKey}`
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${aiKey}` },
         body: body
       })
       return new Response(resp.body, {
         status: resp.status,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        }
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
       })
     }
 
     // ═══ 健康检查 ═══
     if (path === '/api/health') {
-      return new Response(JSON.stringify({ status: 'ok', time: new Date().toISOString() }), {
+      return new Response(JSON.stringify({ status: 'ok', time: new Date().toISOString(), kv: !!env.NEXT_USERS }), {
         headers: { 'Content-Type': 'application/json' }
       })
     }
