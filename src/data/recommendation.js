@@ -25,7 +25,11 @@ export async function getCandidates() {
 // ━━━ 智能推荐（基于收藏+评分+喜好类型匹配，支持刷新换一批） ━━━
 export function getProfileRecommendations(user, interactions, seed = 0) {
   const profile = buildUserProfile(user, interactions)
-  const candidates = getCachedCandidates()
+  let candidates = getCachedCandidates()
+  if (!candidates.length) {
+    // 异步获取，但这里同步返回空结果
+    return []
+  }
   
   const favIds = new Set(profile.favoriteMovies?.map(m => m.id || m.movie_id)?.filter(Boolean) || [])
   profile.favoritedMovies.forEach(id => favIds.add(id))
@@ -77,7 +81,11 @@ export function getProfileRecommendations(user, interactions, seed = 0) {
 // ━━━ 文字提问推荐（先 AI 后算法降级） ━━━
 export async function getTextRecommendations(query, user, interactions) {
   const profile = buildUserProfile(user, interactions)
-  const candidates = getCachedCandidates()
+  // 确保候选数据已加载
+  let candidates = getCachedCandidates()
+  if (!candidates.length) {
+    candidates = await getCandidates()
+  }
   const watchedSet = new Set(profile.watchedMovies)
   
   // 先试 AI（通过本地代理）
