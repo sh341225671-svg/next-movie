@@ -4,8 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "prebuild": "node scripts/prefetch.mjs",
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run prebuild && vite build",
     "start": "node server.cjs",
     "server": "node server.cjs",
     "preview": "vite preview"
