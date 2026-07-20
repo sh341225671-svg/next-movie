@@ -142,45 +142,59 @@ async function submitRegister() {
   if (!age.value) { error.value = '请输入年龄'; return }
   if (selectedMovies.value.length < 5) { error.value = '至少选5部影片'; return }
 
-  const users = getUsers()
-  if (users.find(u => u.nickname === nickname.value)) {
-    error.value = '该昵称已被注册'
-    return
-  }
-
   const pwHash = await hashPw(password.value)
-  const userData = {
-    nickname: nickname.value,
-    passwordHash: pwHash,
-    gender: gender.value,
-    age: Number(age.value),
-    favoriteMovies: selectedMovies.value,
-    createdAt: Date.now()
+  try {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nickname: nickname.value,
+        passwordHash: pwHash,
+        gender: gender.value,
+        age: Number(age.value),
+        favoriteMovies: selectedMovies.value
+      })
+    })
+    const data = await res.json()
+    if (data.error === 'KV_NOT_CONFIGURED') {
+      // KV 未配置，回退到 localStorage
+      const users = JSON.parse(localStorage.getItem('next_users') || '[]')
+      if (users.find(u => u.nickname === nickname.value)) { error.value = '该昵称已被注册'; return }
+      const userData = { nickname: nickname.value, passwordHash: pwHash, gender: gender.value, age: Number(age.value), favoriteMovies: selectedMovies.value, createdAt: Date.now() }
+      users.push(userData)
+      localStorage.setItem('next_users', JSON.stringify(users))
+      const { passwordHash: _, ...safe } = userData
+      userStore.setUser(safe)
+      router.push('/')
+      return
+    }
+    if (data.error) { error.value = data.error; return }
+    userStore.setUser(data.user)
+    router.push('/')
+  } catch (e) {
+    error.value = '网络错误，请稍后重试'
   }
-
-  users.push(userData)
-  saveUsers(users)
-
-  const { passwordHash, ...safeUser } = userData
-  userStore.setUser(safeUser)
-  router.push('/')
 }
 
 async function submitLogin() {
   if (!loginUsername.value) { error.value = '请输入昵称'; return }
   if (!loginPassword.value) { error.value = '请输入密码'; return }
 
-  const users = getUsers()
-  const found = users.find(u => u.nickname === loginUsername.value)
-
-  if (!found) { error.value = '该昵称未注册'; return }
-
   const pwHash = await hashPw(loginPassword.value)
-  if (pwHash !== found.passwordHash) { error.value = '密码错误'; return }
-
-  const { passwordHash, ...safeUser } = found
-  userStore.setUser(safeUser)
-  router.push('/')
+  
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname: loginUsername.value, passwordHash: pwHash })
+    })
+    const data = await res.json()
+    if (data.error) { error.value = data.error; return }
+    userStore.setUser(data.user)
+    router.push('/')
+  } catch (e) {
+    error.value = '网络错误，请稍后重试'
+  }
 }
 
 // 搜索电影（watch 方式）
