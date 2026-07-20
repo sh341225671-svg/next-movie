@@ -353,8 +353,12 @@ onMounted(async () => {
 
     const formattedPop = (popData.results || []).map(formatMovie)
     heroMovie.value = formattedPop[0]
+    
+    // 先显示主内容（Hero+热榜+高分），不阻塞
+    loading.value = false
+    heroLoaded.value = true
 
-    // 每日首次加载推荐（缓存机制）
+    // 再异步加载推荐（不阻塞页面）
     if (userStore.isLoggedIn) {
       const cached = getDailyCache()
       if (cached) {
