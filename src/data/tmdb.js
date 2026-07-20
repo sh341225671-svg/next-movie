@@ -1,50 +1,82 @@
 // TMDB API 封装
-// API 和图片都走本地后端代理，浏览器不直连任何被墙域名
-// 开发模式：Vite 代理 → 后端
-// 生产模式：Express 后端统一代理
+// 首页数据由构建脚本预取（public/data/home.json），零运行时 API 请求
+// 其他页面（搜索、详情、发现、播放源）按需调 API
 
 const DEV = import.meta.env.DEV
-
-// API 路径（开发走 Vite proxy，生产走 Express）
 const BASE = '/api/tmdb'
-
-function imgUrl(path, size = 'w500') {
-  if (!path) return null
-  // 统一走本地代理路径（开发走 Vite proxy，生产走 Cloudflare Function）
-  // 浏览器不直连任何被墙域名，保证国内可用
-  return `/api/tmdb-img/t/p/${size}${path}`
-}
 const API_KEY = import.meta.env.VITE_TMDB_API_KEY || '42dace73a1c2b8df4438c9fb198bc7f2'
 const LANG = 'zh-CN'
 
-async function fetchAPI(endpoint, params = {}, timeout = 5000) {
-  // 构造查询参数
+// ━━━ 静态数据（构建时预取） ━━━
+let _staticData = null
+export async function getStaticData() {
+  if (_staticData) return _staticData
+  try {
+    const resp = await fetch('/data/home.json')
+    if (resp.ok) { _staticData = await resp.json(); return _staticData }
+  } catch {}
+  return null
+}
+
+function imgUrl(path, size = 'w500') {
+  if (!path) return null
+  // 直连 image.tmdb.org（已验证国内可访问）
+  return `https://image.tmdb.org/t/p/${size}${path}`
+}
+
+// ━━━ API 请求（仅用于搜索/详情/发现等无法预取的页面） ━━━
+async function fetchAPI(endpoint, params = {}, timeout = 8000) {
   const qs = new URLSearchParams({ api_key: API_KEY, language: LANG })
   Object.entries(params).forEach(([k, v]) => v !== undefined && qs.set(k, v))
-
-  const url = `${BASE}${endpoint}?${qs}`
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeout)
-
-  let res
+  // 缓存 1 小时
+  const cacheKey = `tmdb_${endpoint}_${qs}`
   try {
-    res = await fetch(url, { signal: controller.signal })
-  } catch (e) {
-    clearTimeout(timer)
-    console.error(`[TMDB] 请求失败: ${url.slice(0, 80)}... — ${e.message}`)
-    throw new Error(`网络请求失败，请检查网络`)
-  }
+    const cached = localStorage.getItem(cacheKey)
+    if (cached) {
+      const p = JSON.parse(cached)
+      if (Date.now() - p.ts < 3600000) return p.data
+    }
+  } catch {}
+  const url = `${BASE}${endpoint}?${qs}`
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeout)
+  let res
+  try { res = await fetch(url, { signal: ctrl.signal }) }
+  catch (e) { clearTimeout(timer); throw new Error('网络请求失败') }
   clearTimeout(timer)
-
-  if (!res.ok) throw new Error(`TMDB ${res.status}: ${res.statusText}`)
-  return res.json()
+  if (!res.ok) throw new Error(`TMDB ${res.status}`)
+  const data = await res.json()
+  try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data })) } catch {}
+  return data
 }
 
-// ━━━ 推荐类 ━━━
+// ━━━ 首页推荐类（从静态数据读取） ━━━
 
 export async function getTrending(type = 'movie', page = 1) {
+  const sd = await getStaticData()
+  if (sd && page === 1) return { results: sd.trending.map(id => sd.movies.find(m => m.id === id)).filter(Boolean) }
   return fetchAPI(`/trending/${type}/week`, { page })
 }
+
+export async function getPopular(page = 1) {
+  const sd = await getStaticData()
+  if (sd && page === 1) return { results: sd.popular.map(id => sd.movies.find(m => m.id === id)).filter(Boolean) }
+  return fetchAPI('/movie/popular', { page })
+}
+
+export async function getTopRated(page = 1) {
+  const sd = await getStaticData()
+  if (sd && page === 1) return { results: sd.topRated.map(id => sd.movies.find(m => m.id === id)).filter(Boolean) }
+  return fetchAPI('/movie/top_rated', { page })
+}
+
+export async function getGenres() {
+  const sd = await getStaticData()
+  if (sd?.genres) return { genres: sd.genres }
+  return fetchAPI('/genre/movie/list')
+}
+
+// ━━━ 需要实时 API 的 ━━━
 
 export async function getRecommendations(movieId, page = 1) {
   return fetchAPI(`/movie/${movieId}/recommendations`, { page })
@@ -54,18 +86,12 @@ export async function getSimilar(movieId, page = 1) {
   return fetchAPI(`/movie/${movieId}/similar`, { page })
 }
 
-// ━━━ 详情类 ━━━
-
 export async function getMovieDetail(movieId) {
-  return fetchAPI(`/movie/${movieId}`, {
-    append_to_response: 'credits,videos,images'
-  })
+  return fetchAPI(`/movie/${movieId}`, { append_to_response: 'credits,videos,images' })
 }
 
 export async function getTvDetail(tvId) {
-  return fetchAPI(`/tv/${tvId}`, {
-    append_to_response: 'credits,videos,images'
-  })
+  return fetchAPI(`/tv/${tvId}`, { append_to_response: 'credits,videos,images' })
 }
 
 export async function getCredits(movieId) {
@@ -76,8 +102,6 @@ export async function getImages(movieId) {
   return fetchAPI(`/movie/${movieId}/images`)
 }
 
-// ━━━ 搜索与发现 ━━━
-
 export async function searchMulti(query, page = 1) {
   return fetchAPI('/search/multi', { query, page })
 }
@@ -86,27 +110,12 @@ export async function discoverMovies(filters = {}) {
   return fetchAPI('/discover/movie', filters)
 }
 
-export async function getGenres() {
-  return fetchAPI('/genre/movie/list')
-}
-
-// ━━━ 热门/高分 ━━━
-
-export async function getPopular(page = 1) {
-  return fetchAPI('/movie/popular', { page })
-}
-
-export async function getTopRated(page = 1) {
-  return fetchAPI('/movie/top_rated', { page })
-}
-
-// ━━━ 播放源 ━━━
-
 export async function getWatchProviders(movieId) {
   return fetchAPI(`/movie/${movieId}/watch/providers`)
 }
 
-// 中国视频平台搜索链接
+// ━━━ 免费源 ━━━
+
 const CN_PLATFORMS = [
   { name: '腾讯视频', url: (q) => `https://v.qq.com/x/search/?q=${encodeURIComponent(q)}`, icon: 'TX' },
   { name: '爱奇艺', url: (q) => `https://www.iqiyi.com/search/${encodeURIComponent(q)}.html`, icon: 'AQ' },
@@ -115,7 +124,6 @@ const CN_PLATFORMS = [
   { name: '豆瓣', url: (q) => `https://www.douban.com/search?q=${encodeURIComponent(q)}`, icon: 'DB' },
 ]
 
-// 免费视频源（用户验证可用）
 const FREE_SOURCES = [
   { name: 'LIBVIO', url: (q) => `https://www.libvio.io/search/-------------.html?wd=${encodeURIComponent(q)}&submit=`, icon: '🎬' },
   { name: '大米星球', url: (q) => `https://www.dmq8a2x9s1.shop/vodsearch/-------------.html?wd=${encodeURIComponent(q)}`, icon: '🌾' },
@@ -124,21 +132,21 @@ const FREE_SOURCES = [
 
 export { CN_PLATFORMS, FREE_SOURCES }
 
-// ━━━ 工具函数（格式化数据） ━━━
+// ━━━ 格式化 ━━━
 
 export function formatMovie(m) {
+  if (!m) return null
   return {
     id: m.id,
-    title: m.title || m.name,
-    originalTitle: m.original_title || m.original_name,
-    poster: imgUrl(m.poster_path, 'w500'),
-    backdrop: imgUrl(m.backdrop_path, 'original'),
-    year: (m.release_date || m.first_air_date || '').slice(0, 4),
-    rating: m.vote_average ? Number(m.vote_average).toFixed(1) : null,
+    title: m.title || m.name || '',
+    originalTitle: m.original_title || m.original_name || '',
+    poster: imgUrl(m.poster_path || m.poster, 'w500'),
+    backdrop: imgUrl(m.backdrop_path || m.backdrop, 'original'),
+    year: (m.release_date || m.first_air_date || m.year || '').slice(0, 4),
+    rating: (m.vote_average || m.rating) ? Number(m.vote_average || m.rating).toFixed(1) : null,
     overview: m.overview || '',
-    genreIds: m.genre_ids || [],
-    mediaType: m.media_type || 'movie',
-    voteCount: m.vote_count || 0
+    genreIds: m.genre_ids || m.genreIds || [],
+    mediaType: m.media_type || m.mediaType || 'movie',
   }
 }
 
@@ -157,9 +165,7 @@ export function formatMovieDetail(d) {
     genres: d.genres?.map(g => ({ id: g.id, name: g.name })) || [],
     genreIds: d.genres?.map(g => g.id) || [],
     cast: d.credits?.cast?.slice(0, 8).map(c => ({
-      id: c.id,
-      name: c.name,
-      character: c.character,
+      id: c.id, name: c.name, character: c.character,
       photo: imgUrl(c.profile_path, 'w185')
     })) || [],
     director: d.credits?.crew?.find(c => c.job === 'Director')?.name || '',
@@ -168,41 +174,27 @@ export function formatMovieDetail(d) {
   }
 }
 
-// 格式化播放源数据
 export function formatWatchProviders(data) {
   const result = { overseas: [], domestic: [] }
-
   const us = data?.results?.US
   if (us) {
-    const platforms = new Set()
+    const seen = new Set()
     ;[...(us.flatrate || []), ...(us.rent || []), ...(us.buy || [])].forEach(p => {
-      if (!platforms.has(p.provider_id)) {
-        platforms.add(p.provider_id)
-        result.overseas.push({
-          id: p.provider_id,
-          name: p.provider_name,
-          logo: imgUrl(p.logo_path, 'original'),
-          type: us.flatrate?.some(x => x.provider_id === p.provider_id) ? '订阅' : '租借/购买'
-        })
+      if (!seen.has(p.provider_id)) {
+        seen.add(p.provider_id)
+        result.overseas.push({ id: p.provider_id, name: p.provider_name, logo: imgUrl(p.logo_path, 'original'), type: us.flatrate?.some(x => x.provider_id === p.provider_id) ? '订阅' : '租借/购买' })
       }
     })
   }
-
   const cn = data?.results?.CN
   if (cn) {
-    const platforms = new Set()
+    const seen = new Set()
     ;[...(cn.flatrate || []), ...(cn.rent || []), ...(cn.buy || [])].forEach(p => {
-      if (!platforms.has(p.provider_id)) {
-        platforms.add(p.provider_id)
-        result.domestic.push({
-          id: p.provider_id,
-          name: p.provider_name,
-          logo: imgUrl(p.logo_path, 'original'),
-          type: cn.flatrate?.some(x => x.provider_id === p.provider_id) ? '订阅' : '租借/购买'
-        })
+      if (!seen.has(p.provider_id)) {
+        seen.add(p.provider_id)
+        result.domestic.push({ id: p.provider_id, name: p.provider_name, logo: imgUrl(p.logo_path, 'original'), type: cn.flatrate?.some(x => x.provider_id === p.provider_id) ? '订阅' : '租借/购买' })
       }
     })
   }
-
   return result
 }
