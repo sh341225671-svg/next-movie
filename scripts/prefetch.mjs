@@ -40,7 +40,7 @@ async function main() {
 
   const payload = {
     generatedAt: new Date().toISOString(),
-    movies: movies.slice(0, 50).map(m => ({
+    movies: movies.slice(0, 100).map(m => ({
       id: m.id,
       title: m.title || m.name,
       poster: m.poster_path,
