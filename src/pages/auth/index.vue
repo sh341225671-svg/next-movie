@@ -46,8 +46,7 @@
             </span>
           </div>
           <div class="relative">
-            <input v-model="searchQuery" placeholder="搜索电影/电视剧..."
-              style="font-size: 14px; padding: 12px 16px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--border); color: var(--text); width: 100%; outline: none;">
+            <input v-model="searchQuery" placeholder="搜索电影/电视剧..." style="font-size:14px;padding:12px 16px;border-radius:var(--r-md);background:var(--surface);border:1px solid var(--border);color:var(--text);width:100%;outline:none;box-sizing:border-box;" />
             <div v-if="searchResults.length" class="absolute top-full left-0 right-0 mt-1 z-10 overflow-hidden"
               style="border-radius: var(--r-md); background: var(--surface-hover); border: 1px solid var(--border); max-height: 200px; overflow-y: auto;">
               <button v-for="r in searchResults" :key="r.id" @click="addMovie(r)"
@@ -87,7 +86,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/userStore'
 
@@ -184,9 +183,9 @@ async function submitLogin() {
   router.push('/')
 }
 
-// 搜索电影
+// 搜索电影（watch 方式）
 let searchTimer = null
-function searchMovies() {
+watch(searchQuery, () => {
   clearTimeout(searchTimer)
   if (!searchQuery.value.trim()) { searchResults.value = []; return }
   searchTimer = setTimeout(async () => {
@@ -196,7 +195,7 @@ function searchMovies() {
       searchResults.value = (data.results || []).filter(r => r.media_type === 'movie' || r.media_type === 'tv').slice(0, 8)
     } catch (e) { console.error(e) }
   }, 300)
-}
+})
 
 function addMovie(m) {
   if (selectedMovies.value.length >= 10) return
