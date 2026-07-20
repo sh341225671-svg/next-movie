@@ -10,9 +10,14 @@ const BASE = '/api/tmdb'
 
 function imgUrl(path, size = 'w500') {
   if (!path) return null
-  // 统一走本地代理路径（开发走 Vite proxy，生产走 Express）
-  // 浏览器不直连任何被墙域名
-  return `/api/tmdb-img/t/p/${size}${path}`
+  if (DEV) {
+    // 开发模式：走 weserv 代理（国内可访问）
+    const direct = `https://image.tmdb.org/t/p/${size}${path}`
+    return `https://images.weserv.nl/?url=${encodeURIComponent(direct)}&af=`
+  }
+  // 生产模式：走 weserv CDN（全球加速，国内可直连）
+  const direct = `https://image.tmdb.org/t/p/${size}${path}`
+  return `https://images.weserv.nl/?url=${encodeURIComponent(direct)}&af=`
 }
 const API_KEY = import.meta.env.VITE_TMDB_API_KEY || '42dace73a1c2b8df4438c9fb198bc7f2'
 const LANG = 'zh-CN'
