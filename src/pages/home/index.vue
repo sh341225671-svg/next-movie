@@ -112,7 +112,7 @@
           <button @click="router.push('/discover')" style="font-size: 14px; color: var(--text-secondary); background: none; border: none; cursor: pointer;">查看更多 →</button>
         </div>
         <div class="scroll-x flex gap-4 pb-4">
-          <MovieCard v-for="m in trending" :key="m.id" :movie="m" @select="goDetail" />
+          <MovieCard v-for="m in trending" :key="m.id" :movie="m" :isWatched="userStore.isWatched(m.id)" :userRating="userStore.getRating(m.id)?.score || 0" @select="goDetail" />
         </div>
       </section>
 
@@ -155,9 +155,10 @@
             <button @click="router.push('/discover')" style="margin-top: 12px; font-size: 13px; color: var(--accent); background: none; border: none; cursor: pointer;">去发现 →</button>
           </div>
           <div style="text-align: right; margin-top: 12px;">
-            <button @click="refreshRecs" :disabled="recLoading"
-              style="font-size: 13px; color: var(--accent); background: none; border: none; cursor: pointer; opacity: 0.7; font-family: inherit;">
-              ↻ 换一批
+            <button @click="refreshRecs" :disabled="recLoading || refreshCount >= MAX_REFRESH"
+              style="font-size: 13px; background: none; border: none; cursor: pointer; font-family: inherit;"
+              :style="{ color: refreshCount >= MAX_REFRESH ? 'var(--text-tertiary)' : 'var(--accent)', opacity: refreshCount >= MAX_REFRESH ? 0.5 : 0.7 }">
+              ↻ 换一批{{ refreshCount >= MAX_REFRESH ? '（已达上限）' : `（剩余${MAX_REFRESH - refreshCount}次）` }}
             </button>
           </div>
         </div>
@@ -210,7 +211,7 @@
           <button @click="router.push('/discover')" style="font-size: 14px; color: var(--text-secondary); background: none; border: none; cursor: pointer;">查看更多 →</button>
         </div>
         <div class="scroll-x flex gap-4 pb-4">
-          <MovieCard v-for="m in topRated" :key="m.id" :movie="m" @select="goDetail" />
+          <MovieCard v-for="m in topRated" :key="m.id" :movie="m" :isWatched="userStore.isWatched(m.id)" :userRating="userStore.getRating(m.id)?.score || 0" @select="goDetail" />
         </div>
       </section>
 
@@ -349,6 +350,12 @@ onMounted(async () => {
     ])
     trending.value = (trendData.results || []).slice(0, 10).map(formatMovie)
     topRated.value = (ratedData.results || []).slice(0, 10).map(formatMovie)
+    
+    // 过滤高分区已看过的
+    if (userStore.isLoggedIn) {
+      const w = new Set(Object.keys(userStore.watched || {}).map(Number))
+      topRated.value = topRated.value.filter(m => !w.has(m.id))
+    }
 
     const formattedPop = (popData.results || []).map(formatMovie)
     heroMovie.value = formattedPop[0]
@@ -398,9 +405,15 @@ async function loadAutoRecs() {
   }
 }
 
+// 刷新次数限制
+const refreshCount = ref(0)
+const MAX_REFRESH = 3
+
 async function refreshRecs() {
-  if (recLoading.value) return
+  if (recLoading.value || refreshCount.value >= MAX_REFRESH) return
+  refreshCount.value++
   await loadAutoRecs()
+  if (recommendations.value.length) setDailyCache(recommendations.value)
 }
 
 function switchRecMode(mode) {
