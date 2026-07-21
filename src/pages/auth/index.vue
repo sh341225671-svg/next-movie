@@ -170,6 +170,14 @@ async function submitRegister() {
     }
     if (data.error) { error.value = data.error; return }
     userStore.setUser(data.user)
+    // 恢复交互数据
+    if (data.user?.interactions) {
+      const { likes, favorites, watched, ratings } = data.user.interactions
+      if (likes) Object.assign(userStore.likes, likes)
+      if (favorites) Object.assign(userStore.favorites, favorites)
+      if (watched) Object.assign(userStore.watched, watched)
+      if (ratings) Object.assign(userStore.ratings, ratings)
+    }
     router.push('/')
   } catch (e) {
     error.value = '网络错误，请稍后重试'
@@ -191,6 +199,14 @@ async function submitLogin() {
     const data = await res.json()
     if (data.error) { error.value = data.error; return }
     userStore.setUser(data.user)
+    // 恢复交互数据
+    if (data.user?.interactions) {
+      const { likes, favorites, watched, ratings } = data.user.interactions
+      if (likes) Object.assign(userStore.likes, likes)
+      if (favorites) Object.assign(userStore.favorites, favorites)
+      if (watched) Object.assign(userStore.watched, watched)
+      if (ratings) Object.assign(userStore.ratings, ratings)
+    }
     router.push('/')
   } catch (e) {
     error.value = '网络错误，请稍后重试'
