@@ -37,6 +37,26 @@ export const useUserStore = defineStore('user', () => {
     try { localStorage.removeItem('next_user') } catch {}
   }
 
+  // 同步交互数据到 KV
+  async function syncToCloud() {
+    if (!user.value?.nickname) return
+    try {
+      await fetch('/api/auth/save-interactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nickname: user.value.nickname,
+          interactions: {
+            likes: likes.value,
+            favorites: favorites.value,
+            watched: watched.value,
+            ratings: ratings.value
+          }
+        })
+      })
+    } catch {}
+  }
+
   // 初始化时从 localStorage 恢复登录态
   try {
     const saved = localStorage.getItem('next_user')
@@ -48,6 +68,7 @@ export const useUserStore = defineStore('user', () => {
     ratings.value[movieId] = { score, title: info.title || '', poster: info.poster || '', genreIds: info.genreIds || [], timestamp: Date.now() }
     ratings.value = { ...ratings.value }
     saveToStorage('next_ratings', ratings.value)
+    syncToCloud()
   }
   function getRating(movieId) {
     return ratings.value[movieId] || null
@@ -62,6 +83,7 @@ export const useUserStore = defineStore('user', () => {
     }
     likes.value = { ...likes.value }
     saveToStorage('next_likes', likes.value)
+    syncToCloud()
   }
   function isLiked(movieId) {
     return !!likes.value[movieId]
@@ -76,6 +98,7 @@ export const useUserStore = defineStore('user', () => {
     }
     favorites.value = { ...favorites.value }
     saveToStorage('next_favorites', favorites.value)
+    syncToCloud()
   }
   function isFavorited(movieId) {
     return !!favorites.value[movieId]
@@ -90,6 +113,7 @@ export const useUserStore = defineStore('user', () => {
     }
     watched.value = { ...watched.value }
     saveToStorage('next_watched', watched.value)
+    syncToCloud()
   }
   function isWatched(movieId) {
     return !!watched.value[movieId]
