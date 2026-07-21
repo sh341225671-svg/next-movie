@@ -397,11 +397,7 @@ async function loadAutoRecs(seed = 0) {
   if (!userStore.isLoggedIn) { recLoading.value = false; return }
   recLoading.value = true
   try {
-    // 确保候选影片池已加载
-    const { getCandidates } = await import('@/data/recommendation')
-    await getCandidates()
-    
-    const recs = getProfileRecommendations(userStore.user, {
+    const recs = await getProfileRecommendations(userStore.user, {
       ratings: userStore.ratings,
       watched: userStore.watched,
       favorites: userStore.favorites,
