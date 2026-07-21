@@ -240,9 +240,100 @@
 import { ref, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/userStore'
-import { getTrending, getPopular, getTopRated, formatMovie } from '@/data/tmdb'
-import { getProfileRecommendations, getTextRecommendations } from '@/data/recommendation'
+import { getTrending, getPopular, getTopRated, formatMovie, getStaticData } from '@/data/tmdb'
 import MovieCard from '@/components/MovieCard.vue'
+
+// ━━━ 推荐函数（内联）━━━
+let _recCandidates = null
+async function getRecCandidates() {
+  if (_recCandidates) return _recCandidates
+  const sd = await getStaticData()
+  if (sd?.movies) {
+    _recCandidates = sd.movies.map(formatMovie).filter(Boolean)
+    return _recCandidates
+  }
+  return []
+}
+async function getProfileRecs(user, interactions, seed = 0) {
+  const candidates = await getRecCandidates()
+  if (!candidates.length) return []
+  const watchedSet = new Set(Object.keys(interactions?.watched || {}).map(Number))
+  let pool = candidates.filter(m => !watchedSet.has(m.id))
+  pool.sort((a, b) => ((parseFloat(a.rating||0)*7+seed*137)%100)-((parseFloat(b.rating||0)*7+seed*137)%100))
+  return pool.slice(0, 6).map(m => ({
+    movie: m,
+    reason: (m.overview||'').slice(0,25) + ' | 评分'+m.rating,
+    tier: '推荐'
+  }))
+}
+async function getTextRecs(query, user, interactions) {
+  const candidates = await getRecCandidates()
+  if (!candidates.length) return []
+  const watchedSet = new Set(Object.keys(interactions?.watched || {}).map(Number))
+  try {
+    const ak = import.meta.env.VITE_AI_API_KEY
+    if (ak) {
+      const r = await fetch('/api/ai/chat/completions', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({model:'deepseek-v4-flash',
+          messages:[{role:'system',content:'你是电影推荐专家。根据用户需求从候选影片中分析并推荐6部。每部给20-30字专业理由。输出JSON。'},
+          {role:'user',
+          content:`用户需求:${query.slice(0,150)}\n\n候选影片:\n${candidates.slice(0,20).map(m=>`《${m.title}》(${m.year}) 评分${m.rating} ${(m.overview||'').slice(0,40)}`).join('\n')}\n\n输出JSON:{"recommendations":[{"title":"","year":"","reason":"专业理由"}]}`}],
+          max_tokens:2048, temperature:0.5})
+      })
+      if (r.ok) {
+        const d = await r.json()
+        let c = d.choices?.[0]?.message?.content || d.choices?.[0]?.message?.reasoning_content || ''
+        let p = null
+        try { p = JSON.parse(c) } catch { const m = c.match(/\{[\s\S]*\}/); if (m) try { p = JSON.parse(m[0]) } catch {} }
+        if (p?.recommendations?.length) {
+          const matched = p.recommendations.slice(0, 6).map(rec => {
+            const m = candidates.find(x => x.title === rec.title || x.title?.includes(rec.title))
+            return m && !watchedSet.has(m.id) ? { ...rec, movie: m } : null
+          }).filter(Boolean)
+          if (matched.length > 0) return matched  // 匹配成功才返回
+        }
+      }
+    }
+  } catch {}
+
+  // AI 失败 → TMDB 搜索（更广的电影库）
+  try {
+    const { searchMulti, formatMovie: fm } = await import('@/data/tmdb')
+    const data = await searchMulti(query, 1)
+    const hits = (data.results || []).filter(r => r.media_type === 'movie' || r.media_type === 'tv').slice(0, 10)
+    if (hits.length >= 1) {
+      return hits.map(fm).filter(Boolean).filter(m => !watchedSet.has(m.id)).slice(0, 6).map(m => ({
+        movie: m, reason: `与你搜索「${query.slice(0,8)}」相关 · 评分${m.rating || '?'}`, tier: '推荐'
+      }))
+    }
+  } catch {}
+
+  // TMDB 也无结果 → 关键词匹配
+  const q = query.toLowerCase()
+  const kw = q.split(/[\s,\\.!\\?;:\\u3000-\\u303f\\uff00-\\uffef]+/).filter(w => w.length >= 2)
+  let scored = candidates.filter(m => !watchedSet.has(m.id)).map(m => {
+    let s = 0; const t = (m.title||'').toLowerCase(), o = (m.overview||'').toLowerCase()
+    kw.forEach(k => { if (t.includes(k)) s += 5; if (o.includes(k)) s += 2 })
+    const r = parseFloat(m.rating||0); if (r >= 8) s += 2; else if (r >= 7) s += 1
+    return { movie: m, score: s }
+  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score)
+  let res = scored.slice(0, 6).map(s => ({ movie: s.movie, reason: (s.movie.overview||'').slice(0, 25) + ' | 评分' + s.movie.rating, tier: '推荐' }))
+  if (res.length < 6) {
+    const used = new Set(res.map(r => r.movie.id))
+    for (const c of [...candidates].sort((a, b) => parseFloat(b.rating||0) - parseFloat(a.rating||0))) {
+      if (res.length >= 6) break
+      if (used.has(c.id) || watchedSet.has(c.id)) continue
+      res.push({ movie: c, reason: `评分${c.rating}，口碑稳定`, tier: '备选' })
+      used.add(c.id)
+    }
+  }
+  return res
+}
+
+// 防 tree-shaking：强制保留所有推荐相关函数
+const __keep = () => { loadAutoRecs(); submitTextQuery(); refreshRecs(); }
+window.__nextRecs = { getRecCandidates, getProfileRecs, getTextRecs, loadAutoRecs, submitTextQuery, refreshRecs, __keep }
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -295,6 +386,24 @@ try {
   if (saved) textResults.value = JSON.parse(saved)
 } catch {}
 
+// 刷新次数持久化（localStorage + 日期绑定）
+const REFRESH_KEY = 'next_refresh_count_v2'
+const REFRESH_DATE_KEY = 'next_refresh_date_v2'
+try {
+  const savedDate = localStorage.getItem(REFRESH_DATE_KEY)
+  const today = new Date().toDateString()
+  if (savedDate === today) {
+    const savedCount = localStorage.getItem(REFRESH_KEY)
+    if (savedCount) refreshCount.value = parseInt(savedCount) || 0
+  } else {
+    localStorage.setItem(REFRESH_DATE_KEY, today)
+    localStorage.setItem(REFRESH_KEY, '0')
+    refreshCount.value = 0
+  }
+} catch {}
+
+// (以下为自动加载逻辑)
+
 async function doSearch() {
   if (!searchQuery.value.trim()) return
   searchFocused.value = true
@@ -323,15 +432,16 @@ watch(searchQuery, () => {
   }
 })
 
-// 每日推荐缓存（24小时内不重复请求）
-const DAILY_CACHE_KEY = 'next_daily_recs'
+// 每日推荐缓存（24小时内不重复请求）- v2新键名强制刷新旧缓存
+const DAILY_CACHE_KEY = 'next_daily_recs_v2'
 function getDailyCache() {
   try {
     const raw = localStorage.getItem(DAILY_CACHE_KEY)
     if (!raw) return null
     const data = JSON.parse(raw)
     const today = new Date().toDateString()
-    if (data.date === today && Array.isArray(data.recs) && data.recs.length >= 6 && data.recs[0]?.reason) return data.recs
+    if (data.date === today && Array.isArray(data.recs) && data.recs.length >= 3
+      && data.recs[0]?.reason && data.recs[0]?.movie?.id) return data.recs
   } catch {}
   return null
 }
@@ -373,7 +483,6 @@ onMounted(async () => {
     if (userStore.isLoggedIn) {
       const cached = getDailyCache()
       if (cached) {
-        // 过滤已看过的
         const watchedSet = new Set(Object.keys(userStore.watched || {}).map(Number))
         recommendations.value = cached.filter(r => !watchedSet.has(r.movie?.id || r.id))
         if (recommendations.value.length < 6) {
@@ -397,7 +506,7 @@ async function loadAutoRecs(seed = 0) {
   if (!userStore.isLoggedIn) { recLoading.value = false; return }
   recLoading.value = true
   try {
-    const recs = await getProfileRecommendations(userStore.user, {
+    const recs = await getProfileRecs(userStore.user, {
       ratings: userStore.ratings,
       watched: userStore.watched,
       favorites: userStore.favorites,
@@ -417,6 +526,7 @@ const MAX_REFRESH = 3
 async function refreshRecs() {
   if (recLoading.value || refreshCount.value >= MAX_REFRESH) return
   refreshCount.value++
+  try { localStorage.setItem(REFRESH_KEY, String(refreshCount.value)) } catch {}
   await loadAutoRecs(refreshCount.value)
   if (recommendations.value.length) setDailyCache(recommendations.value)
 }
@@ -429,7 +539,7 @@ async function submitTextQuery() {
   if (!queryText.value.trim() || textLoading.value) return
   textLoading.value = true
   try {
-    const recs = getTextRecommendations(queryText.value.trim(), userStore.user, {
+    const recs = await getTextRecs(queryText.value.trim(), userStore.user, {
       ratings: userStore.ratings,
       watched: userStore.watched,
       favorites: userStore.favorites,
