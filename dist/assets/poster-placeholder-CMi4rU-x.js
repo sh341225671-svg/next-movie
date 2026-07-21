@@ -1,1 +1,0 @@
-var e=`/assets/poster-placeholder.png`;export{e as t};
