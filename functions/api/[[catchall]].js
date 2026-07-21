@@ -42,7 +42,21 @@ export async function onRequest(context) {
         return new Response(JSON.stringify({ error: '密码错误' }), { status: 401, headers: { 'Content-Type': 'application/json' } })
       }
       const { passwordHash: _, ...safeUser } = user
+      // 返回交互数据
+      const interactions = await (env.NEXT_USERS?.get(`int:${nickname}`) || '{}')
+      safeUser.interactions = JSON.parse(interactions) || { likes: {}, favorites: {}, watched: {}, ratings: {} }
       return new Response(JSON.stringify({ success: true, user: safeUser }), { headers: { 'Content-Type': 'application/json' } })
+    }
+
+    // ═══ 保存交互数据 ═══
+    if (path === '/api/auth/save-interactions' && request.method === 'POST') {
+      const body = await request.json()
+      const { nickname, interactions } = body
+      if (nickname && env.NEXT_USERS) {
+        await env.NEXT_USERS.put(`int:${nickname}`, JSON.stringify(interactions))
+        return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ error: 'Missing params' }), { status: 400, headers: { 'Content-Type': 'application/json' } })
     }
 
     // ═══ TMDB API ═══
