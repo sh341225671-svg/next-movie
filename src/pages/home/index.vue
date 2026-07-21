@@ -359,6 +359,11 @@ onMounted(async () => {
 
     const formattedPop = (popData.results || []).map(formatMovie)
     heroMovie.value = formattedPop[0]
+    // 每日轮换：根据日期选择不同的 hero 影片
+    if (formattedPop.length > 1) {
+      const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000)
+      heroMovie.value = formattedPop[dayOfYear % formattedPop.length]
+    }
     
     // 先显示主内容（Hero+热榜+高分），不阻塞
     loading.value = false
@@ -392,6 +397,10 @@ async function loadAutoRecs(seed = 0) {
   if (!userStore.isLoggedIn) { recLoading.value = false; return }
   recLoading.value = true
   try {
+    // 确保候选影片池已加载
+    const { getCandidates } = await import('@/data/recommendation')
+    await getCandidates()
+    
     const recs = getProfileRecommendations(userStore.user, {
       ratings: userStore.ratings,
       watched: userStore.watched,
