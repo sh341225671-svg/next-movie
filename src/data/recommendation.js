@@ -18,7 +18,11 @@ export function buildUserProfile(user, interactions) {
 // ━━━ 获取候选影片池 ━━━
 export async function getCandidates() {
   const sd = await getStaticData()
-  if (sd?.movies) return sd.movies.map(formatMovie).filter(Boolean)
+  if (sd?.movies) {
+    const result = sd.movies.map(formatMovie).filter(Boolean)
+    try { sessionStorage.setItem('next_candidates', JSON.stringify(result)) } catch {}
+    return result
+  }
   return []
 }
 
